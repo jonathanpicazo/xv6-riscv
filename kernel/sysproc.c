@@ -47,8 +47,18 @@ sys_sbrk(void)
   if(argint(0, &n) < 0)
     return -1;
   addr = myproc()->sz;
-  if(growproc(n) < 0)
+  // increment process size
+  myproc()->sz += n;
+  // check proc sz is greater than limit
+  if (myproc()->sz > MAXVA) {
     return -1;
+  }
+  // handle negative sbrk() arguments to pass lazytests
+  if (n < 0) {
+    // release mem if it is negative
+    uvmdealloc(myproc()->pagetable, addr, myproc()->sz);
+  }
+  
   return addr;
 }
 

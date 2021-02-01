@@ -67,7 +67,39 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  }
+   // added else if to detect page fault, 
+   // took code from uvmalloc in vm.c to handle fault
+   else if (r_scause() == 13 || r_scause() == 15) {
+     uint64 va = (uint64) r_stval();
+     uint64 page_bound = PGROUNDDOWN(va);
+     uint64 new_bound = p->sz;
+     // only allocate pages if address is less than process sz, otherwise return exit(-1)
+     if (va >= new_bound) {
+       p->killed = 1;
+       exit(-1);
+     }
+    // check if virtual address is below the stack
+     if (va < p->tf->sp) {
+       p->killed = 1;
+       exit(-1);
+     }
+
+    char* mem = kalloc();
+    // kill procces is kalloc fails
+    if (mem == 0) {
+      p->killed = 1;
+      exit(-1);
+    }
+    memset(mem, 0, PGSIZE);
+    // kill process if mappages is not successful
+    if(mappages(p->pagetable, page_bound, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0) {
+      kfree(mem);
+      p->killed = 1;
+      exit(-1);
+  }
+}
+  else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;

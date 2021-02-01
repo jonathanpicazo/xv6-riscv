@@ -69,6 +69,10 @@ int
 argaddr(int n, uint64 *ip)
 {
   *ip = argraw(n);
+  // added to fix fbug
+  if (*ip >= myproc()->sz) {
+    return -1;
+  }
   return 0;
 }
 

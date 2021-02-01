@@ -16,7 +16,7 @@
 struct devsw devsw[NDEV];
 struct {
   struct spinlock lock;
-  struct file file[NFILE];
+  //struct file file[NFILE];
 } ftable;
 
 void
@@ -30,15 +30,18 @@ struct file*
 filealloc(void)
 {
   struct file *f;
-
+  // sz variable used to signify size of a file
+  uint64 sz = sizeof(struct file);
   acquire(&ftable.lock);
-  for(f = ftable.file; f < ftable.file + NFILE; f++){
-    if(f->ref == 0){
-      f->ref = 1;
-      release(&ftable.lock);
-      return f;
-    }
+  // check if there is a free block with bd_malloc, will return 1 if free block
+  if ((f = bd_malloc(sz))) {
+    // set memory for file with apppropriate sz.
+    memset(f, 0, sz);
+    f->ref = 1;
+    release(&ftable.lock);
+    return f;
   }
+
   release(&ftable.lock);
   return 0;
 }
@@ -80,6 +83,8 @@ fileclose(struct file *f)
     iput(ff.ip);
     end_op(ff.ip->dev);
   }
+  // free allocated memory with buddy allocaters's free function
+  bd_free(f);
 }
 
 // Get metadata about file f.
