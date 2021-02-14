@@ -18,15 +18,50 @@ struct run {
   struct run *next;
 };
 
+
 struct {
   struct spinlock lock;
   struct run *freelist;
+  // array that keeps track of page table entry reference counts
+  int refCount[(PHYSTOP - KERNBASE) / PGSIZE];
 } kmem;
+// initializes the reference count array elements to 0
+void refinit() {
+  acquire(&kmem.lock);
+  for (int i = 0; i < (PHYSTOP - KERNBASE) / PGSIZE; ++i) {
+    kmem.refCount[i] = 0;
+  }
+  release(&kmem.lock);
+}
+// helper function that either increments or decrements a refCount element
+void setReference(uint64 addr, int op) {
+  if(addr < KERNBASE) {
+    return;
+  }
+  acquire(&kmem.lock);
+  if (op) {
+    kmem.refCount[(addr - KERNBASE) / PGSIZE] += 1;
+  }
+  else {
+    if (kmem.refCount[(addr - KERNBASE) / PGSIZE] == 0) {
+      release(&kmem.lock);
+      return;
+    }
+    kmem.refCount[(addr - KERNBASE) / PGSIZE] -= 1;
+  }
+  release(&kmem.lock);
+}
+// returns refCount element, given an uint64 virtual/page address
+int getReference(uint64 addr) {
+  return kmem.refCount[(addr - KERNBASE) / PGSIZE];
+}
+
 
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  refinit();
   freerange(end, (void*)PHYSTOP);
 }
 

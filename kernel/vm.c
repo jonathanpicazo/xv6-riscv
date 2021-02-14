@@ -75,7 +75,7 @@ kvminithart()
 //   21..39 -- 9 bits of level-1 index.
 //   12..20 -- 9 bits of level-0 index.
 //    0..12 -- 12 bits of byte offset within the page.
-static pte_t *
+pte_t *
 walk(pagetable_t pagetable, uint64 va, int alloc)
 {
   if(va >= MAXVA)
@@ -166,6 +166,8 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if(*pte & PTE_V)
       panic("remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
+    // since we are mapping a pte, increase the reference count at specified address
+    setReference(pa, 1);
     if(a == last)
       break;
     a += PGSIZE;
@@ -180,30 +182,42 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 void
 uvmunmap(pagetable_t pagetable, uint64 va, uint64 size, int do_free)
 {
-  uint64 a, last;
+  
+  uint64 a;
+  uint64 last;
   pte_t *pte;
   uint64 pa;
 
   a = PGROUNDDOWN(va);
+
   last = PGROUNDDOWN(va + size - 1);
   for(;;){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
     if((*pte & PTE_V) == 0){
-      printf("va=%p pte=%p\n", a, *pte);
-      panic("uvmunmap: not mapped");
+      // printf("va=%p pte=%p\n", a, *pte);
+      // panic("uvmunmap: not mapped");
+      goto point;
     }
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
-    if(do_free){
-      pa = PTE2PA(*pte);
+    // if(do_free){
+    //   pa = PTE2PA(*pte);
+    //   kfree((void*)pa);
+    // }
+    pa = PTE2PA(*pte);
+    // decrease reference count at specified page addreess
+    setReference(pa, 0);
+    // free memory if do_free flag is true and if the reference count at that page address is 1
+    if(do_free && getReference((uint64)pa) == 1) {
       kfree((void*)pa);
     }
     *pte = 0;
-    if(a == last)
-      break;
-    a += PGSIZE;
-    pa += PGSIZE;
+    point:
+      if(a == last)
+        break;
+      a += PGSIZE;
+      pa += PGSIZE;
   }
 }
 
@@ -322,7 +336,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  //char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -330,14 +344,20 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    // flag page table entry with cow mapping, and make it non writable
+    *pte = *pte & ~PTE_W;
+    *pte = *pte | PTE_C;
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    if(mappages(new, i, PGSIZE, pa, flags) != 0) {
       goto err;
     }
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    // if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+    //   kfree(mem);
+    //   goto err;
+    // }
   }
   return 0;
 
@@ -366,12 +386,42 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
+  uint flags;
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
+    // map pte similiar to how we mapped it in usertrap()
+    pte_t *pte = walk(pagetable, va0, 0);
+    if (!*pte) {
+      return -1;
+    }
+    // check if pte is mapped with COW flag
+    if (*pte & PTE_C) {
+      // if the page address already has 2 mappings, unmap the entry of the COW flag and make it writable
+      if (getReference(pa0) == 2) {
+        *pte |= PTE_W;
+        *pte &= ~PTE_C;
+      }
+      else {
+        char* mem = kalloc();
+        if (!mem) {
+          return -1;
+        }
+        // move physical address contents to mem and remove its COW mapping, also make it writable
+        setReference(pa0, 0);
+        memmove(mem,(char*)pa0, PGSIZE);
+        *pte |= PTE_W;
+        *pte &= ~PTE_C;
+        flags = PTE_FLAGS(*pte);
+        *pte = PA2PTE((uint64)mem) | flags;
+        pa0 = (uint64)mem;
+        // increase reference count at newly created memory address from kalloc()
+        setReference(pa0, 1);
+      }
+    }
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;

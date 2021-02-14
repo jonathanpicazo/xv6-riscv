@@ -65,6 +65,45 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if (r_scause() == 13 ||r_scause() == 15) {
+    uint flags;
+    uint64 va = PGROUNDDOWN(r_stval());
+    // only allocate pages if address is less than process sz or if va is less than the MAXVA
+    if (va >= MAXVA || va > p->sz){
+      p->killed = 1;
+      exit(-1);
+    }
+    
+    pte_t *pte = walk(p->pagetable, va, 0);
+    // if the walk() fails or the pte already has a COW mapping, exit
+    if (!*pte || !(*pte & PTE_C)) {
+      p->killed = 1;
+      exit(-1);
+    }
+    uint64 pa = PTE2PA(*pte);
+    // if the page address already has 2 mappings, unmap the entry of the COW flag and make it writable
+    if (getReference(pa) == 2) {
+      *pte = *pte | PTE_W;
+      *pte = *pte & ~PTE_C;
+    }
+    else {
+      char* mem = kalloc();
+      if (!mem) {
+        p->killed = 1;
+        exit(-1);
+      }
+      // decreases reference count at specified page address
+      setReference(pa, 0);
+      memmove(mem,(char*)pa, PGSIZE);
+      // move physical address contents to mem and remove its COW mapping, also make it writable
+      *pte = *pte | PTE_W;
+      *pte = *pte & ~PTE_C;
+      flags = PTE_FLAGS(*pte);
+      *pte = PA2PTE((uint64)mem) | flags;
+      // increase reference count at newly created memory address from kalloc()
+      setReference((uint64)mem, 1);
+    }
+  
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
