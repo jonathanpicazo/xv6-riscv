@@ -23,3 +23,5 @@
 
 // System calls for labs
 #define SYS_ntas   22
+// numbered system call, this is necessary when adding a syscall
+#define SYS_symlink 23
