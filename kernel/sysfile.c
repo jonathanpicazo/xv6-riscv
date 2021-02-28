@@ -283,6 +283,7 @@ create(char *path, short type, short major, short minor)
   return ip;
 }
 
+
 uint64
 sys_open(void)
 {
@@ -328,6 +329,32 @@ sys_open(void)
     iunlockput(ip);
     end_op(ROOTDEV);
     return -1;
+  }
+
+  // check if O_NOFOLLOW is not set
+  // recursively follow it until a non-linkfile is reached
+  if((omode & O_NOFOLLOW) == 0) {
+    int depth = 0;
+    while(ip->type == T_SYMLINK && depth < 10) {
+      int len = 0;
+      readi(ip, 0, (uint64)&len, 0, sizeof(int));
+      readi(ip, 0, (uint64)path, sizeof(int), len + 1);
+      iunlockput(ip);
+
+      if((ip = namei(path)) == 0){
+        end_op(ROOTDEV);
+        return -1;
+      }
+
+      ilock(ip);
+      ++depth;
+    }
+
+    if(depth >= 10) {
+      iunlockput(ip);
+      end_op(ROOTDEV);
+      return -1;
+    }
   }
 
   if(ip->type == T_DEVICE){
@@ -483,3 +510,30 @@ sys_pipe(void)
   return 0;
 }
 
+
+
+uint64 sys_symlink(void) { 
+  //symlink(char *target, char* path)
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+
+  // check if argument is valid, taken from other sysfile system calls
+  if (argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+  begin_op(ROOTDEV);
+
+  // create path of symbolic link type
+  // return -1 if create is unsuccesfull
+  if((ip =  create(path,T_SYMLINK,0,0))==0){
+    end_op(ROOTDEV);
+    return -1;
+  }
+
+  int len = strlen(target);
+  // write target and path date to inode
+  writei(ip,0,(uint64)&len,0,sizeof(len));
+  writei(ip,0,(uint64)target,sizeof(len),len+1);
+  iunlockput(ip);
+  end_op(ROOTDEV);
+  return 0;
+}

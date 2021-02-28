@@ -381,41 +381,74 @@ bmap(struct inode *ip, uint bn)
   uint addr, *a;
   struct buf *bp;
 
-  if(bn < NDIRECT){
-    if((addr = ip->addrs[bn]) == 0)
+  if (bn < NDIRECT) {
+    if ((addr = ip->addrs[bn]) == 0)
       ip->addrs[bn] = addr = balloc(ip->dev);
     return addr;
   }
   bn -= NDIRECT;
 
-  if(bn < NINDIRECT){
-    // Load indirect block, allocating if necessary.
-    if((addr = ip->addrs[NDIRECT]) == 0)
+  if (bn < NINDIRECT) {
+    // Load singly-indirect block, allocating if necessary.
+    if ((addr = ip->addrs[NDIRECT]) == 0)
       ip->addrs[NDIRECT] = addr = balloc(ip->dev);
     bp = bread(ip->dev, addr);
-    a = (uint*)bp->data;
-    if((addr = a[bn]) == 0){
+    a = (uint *)bp->data;
+    if ((addr = a[bn]) == 0) {
       a[bn] = addr = balloc(ip->dev);
       log_write(bp);
     }
     brelse(bp);
     return addr;
   }
-
+  else {
+    // we must now allocate for a doubly indirect block
+    bn -= NINDIRECT;
+    // check if address at block (12) is free, allocate if it is
+    if ((addr = ip->addrs[NDIRECT + 1]) == 0) {
+      ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
+    }
+    // call bread() and get buffer's data
+    bp = bread(ip->dev, addr);
+    a = (uint *)bp->data;
+    
+    // 1st indirect block is at bn / NINDIRECT
+    if ((addr = a[bn/NINDIRECT]) == 0) {	
+        a[bn/NINDIRECT] = addr = balloc(ip->dev);
+        log_write(bp);
+    }
+    // must run brelse(buffer) after calling bread()
+    brelse(bp);
+    // calculates block number for 2nd indirect block
+    // bn - NININDIRECT * index of 1st level block
+    bn = bn - NINDIRECT * (bn / NINDIRECT);
+    bp = bread(ip->dev, addr);
+    a = (uint *)bp->data;
+    if ((addr = a[bn]) == 0) {
+      a[bn] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    return addr;
+  }
   panic("bmap: out of range");
 }
+
 
 // Truncate inode (discard contents).
 // Only called when the inode has no links
 // to it (no directory entries referring to it)
 // and has no in-memory reference to it (is
 // not an open file or current directory).
-static void
+
+void
 itrunc(struct inode *ip)
 {
   int i, j;
-  struct buf *bp;
-  uint *a;
+  // bq and b are used as temps for assignments in link loop
+  // bq as buffer temp and b as address temp
+  struct buf *bp, *bq;
+  uint *a, *b;
 
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
@@ -424,21 +457,45 @@ itrunc(struct inode *ip)
     }
   }
 
-  if(ip->addrs[NDIRECT]){
+  if (ip->addrs[NDIRECT]){
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
     a = (uint*)bp->data;
     for(j = 0; j < NINDIRECT; j++){
-      if(a[j])
+      if(a[j] != 0)
         bfree(ip->dev, a[j]);
     }
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
   }
+  if (ip->addrs[NDIRECT + 1]) {
+    bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+    a = (uint *)bp->data;
+    // temp struct buffer, bq
+    // nested loop to find allocated blocks to free
+    for (i = 0; i < NINDIRECT; i++) {
+      if (a[i] != 0) {
+        bq = bread(ip->dev, a[i]);
+        b = (uint *)bq->data;
+        for (j = 0; j < NINDIRECT; j++){
+          if(b[j] != 0){
+            bfree(ip->dev,b[j]);
+          }
+        }
+        brelse(bq);
+        bfree(ip->dev,a[i]);
+        a[i] = 0;
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+    ip->addrs[NDIRECT + 1] = 0;  
+  }
 
   ip->size = 0;
   iupdate(ip);
 }
+
 
 // Copy stat information from inode.
 // Caller must hold ip->lock.
