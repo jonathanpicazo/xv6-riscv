@@ -37,5 +37,3 @@ entry("sbrk");
 entry("sleep");
 entry("uptime");
 entry("ntas");
-# added syscall to entries, this is necessary when adding a syscall
-entry("symlink")
