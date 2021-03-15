@@ -5,6 +5,25 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
+
+struct file
+{
+  enum
+  {
+    FD_NONE,
+    FD_PIPE,
+    FD_INODE,
+    FD_DEVICE
+  } type;
+  int ref; // reference count
+  char readable;
+  char writable;
+  struct pipe *pipe; // FD_PIPE
+  struct inode *ip;  // FD_INODE and FD_DEVICE
+  uint off;          // FD_INODE
+  short major;       // FD_DEVICE
+};
 
 struct spinlock tickslock;
 uint ticks;
@@ -32,7 +51,6 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
-//
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
 //
@@ -70,7 +88,62 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } 
+    else if (r_scause() == 13 || r_scause() == 15) {
+      struct proc *p = myproc();
+      uint64 va = r_stval();
+      va = PGROUNDDOWN(va);
+
+      if (va > MAXVA || va >= p->sz) {
+        p->killed = 1;
+        exit(-1);
+      }
+      int i;
+      for (i = 0; i < 16; ++i) {
+        if (p->vma_table[i].free && va >= p->vma_table[i].start && va < p->vma_table[i].end){
+          break;
+        }
+      }
+      // if no avaiable spots on table, return w/ error
+      if (i == 16) {
+        p->killed = 1;
+        exit(-1);
+      }
+      uint64 addr = p->vma_table[i].start;
+      int prot = p->vma_table[i].prot;
+      struct file *f = p->vma_table[i].protf;
+      char *mem = kalloc();
+      if (!mem) {
+        p->killed = 1;
+        exit(-1);
+    }
+      memset(mem, 0, PGSIZE);
+      begin_op(ROOTDEV);
+      ilock(f->ip);
+      if (readi(f->ip, 0, (uint64)mem, va - addr, PGSIZE) < 0) {
+        iunlock(f->ip);
+        end_op(ROOTDEV);
+        p->killed = 1;
+        exit(-1);
+      }
+      iunlock(f->ip);
+      end_op(ROOTDEV);
+
+      uint64 flag = PTE_U;
+      if ((prot & PROT_READ) ){
+        flag = flag | PTE_R;
+      }
+      if ((prot & PROT_WRITE)){
+        flag = flag | PTE_W;
+      }
+
+      if (mappages(p->pagetable, va, PGSIZE, (uint64)mem, flag) != 0) {
+        kfree(mem);
+        p->killed = 1;
+        exit(-1);
+      }
+  }
+  else {
     printf("usertrap(): unexpected scause %p (%s) pid=%d\n", r_scause(), scause_desc(r_scause()), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;

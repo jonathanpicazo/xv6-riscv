@@ -114,6 +114,16 @@ found:
     return 0;
   }
 
+  
+  for (int i = 0; i < 16; ++i){
+    p->vma_table[i].free = 0;
+    p->vma_table[i].start = 0;
+    p->vma_table[i].end = 0;
+    p->vma_table[i].flags = 0;
+    p->vma_table[i].protf = 0;
+
+  }
+
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
 
@@ -122,6 +132,7 @@ found:
   memset(&p->context, 0, sizeof p->context);
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+  
 
   return p;
 }
@@ -264,6 +275,16 @@ fork(void)
   np->sz = p->sz;
 
   np->parent = p;
+  for (int i = 0; i < 16; ++i ){
+    np->vma_table[i].start = p->vma_table[i].start;
+    np->vma_table[i].end = p->vma_table[i].end;
+    np->vma_table[i].free = p->vma_table[i].free;
+    np->vma_table[i].prot = p->vma_table[i].prot;
+    np->vma_table[i].flags = p->vma_table[i].flags;
+    if ((np->vma_table[i].protf = p->vma_table[i].protf)) {
+      filedup(np->vma_table[i].protf);
+    }
+  }
 
   // copy saved user registers.
   *(np->tf) = *(p->tf);
